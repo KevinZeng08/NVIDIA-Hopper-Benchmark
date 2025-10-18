@@ -26,11 +26,11 @@ using barrier = cuda::barrier<cuda::thread_scope_block>;
 #define ARRAY_SIZE (4 * 1024*1024*(1024/sizeof(dtype))) // GB
 #define GMEM_WIDTH (32*1024)
 #define GMEM_HEIGHT (32*1024)
-constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 128, 128, 256}; // 1, 2, 4, 8, 16, 32, 64 KB
-constexpr uint  SMEM_HEIGHT[] = {4, 8, 16, 32, 64, 64, 128, 128}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
+constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 128, 128, 256, 256}; // 1-128 KB
+constexpr uint  SMEM_HEIGHT[] = {4, 8, 16, 32, 64, 64, 128, 128, 256}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
 constexpr uint BLOCKS[] = {132}; // same as number of SMs
 #define THREADS_PER_BLOCK 128
-constexpr uint IDX = 7;
+constexpr uint IDX = 8;
 constexpr uint LOAD_SIZE = (SMEM_WIDTH[IDX] * SMEM_HEIGHT[IDX] * sizeof(dtype)); //bytes
 
 // cp.async helper functions
@@ -72,7 +72,8 @@ __global__ void cp_async_bw_2d(dtype *array, dtype *dsink)
     uint32_t tid = threadIdx.x;
     uint32_t block_offset = blockIdx.x;
 
-    __shared__ alignas(16) dtype smem[LOAD_SIZE/sizeof(dtype)];
+    // __shared__ alignas(16) dtype smem[LOAD_SIZE/sizeof(dtype)];
+    extern __shared__ __align__(128) dtype smem[];
 
     const int total_tiles = ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE;
     const int cp_async_bytes = 16; // 16-byte chunks for cp.async.cg
@@ -119,6 +120,11 @@ int main() {
 
         init_data<<<BLOCKS[i], THREADS_PER_BLOCK>>>(array_g);
 
+        auto kernel = &cp_async_bw_2d;
+        int smem_size = LOAD_SIZE;
+        if (smem_size >= 48 * 1024) {
+            cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+        }
         cudaEvent_t start, stop;
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
@@ -126,7 +132,7 @@ int main() {
 
         // Test 2D pattern version
         cudaEventRecord(start);
-        cp_async_bw_2d<<<BLOCKS[i], THREADS_PER_BLOCK>>>(array_g, dsink_g);
+        kernel<<<BLOCKS[i], THREADS_PER_BLOCK, smem_size>>>(array_g, dsink_g);
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         CUDA_CHECK(cudaPeekAtLastError());

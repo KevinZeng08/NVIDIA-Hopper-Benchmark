@@ -31,12 +31,12 @@ using barrier = cuda::barrier<cuda::thread_scope_block>;
 #define ARRAY_SIZE (4 * 1024*1024*(1024/sizeof(dtype))) // 4 GB total for all data types
 #define GMEM_WIDTH (32*1024)
 #define GMEM_HEIGHT (32*1024)
-constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 64, 128, 128}; // 0.5-32KB
-constexpr uint  SMEM_HEIGHT[] = {1, 4, 8, 16, 32, 64, 64, 128}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
+constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 64, 128, 128, 256, 256}; // 0.5-128KB
+constexpr uint  SMEM_HEIGHT[] = {1, 4, 8, 16, 32, 64, 64, 128, 128, 256}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
 // constexpr uint BLOCKS[] = {114, 228, 342, 456};	
 constexpr uint BLOCKS[] = {132}; // same as number of SMs, simulate persistent kernels	
 #define THREADS_PER_BLOCK 128
-constexpr uint IDX = 5;
+constexpr uint IDX = 9;
 constexpr uint LOAD_SIZE (SMEM_WIDTH[IDX]*SMEM_HEIGHT[IDX]*sizeof(dtype)); //bytes
 
 
@@ -63,7 +63,9 @@ __global__ void tma_bw_2d(const __grid_constant__ CUtensorMap tma_desc, dtype *d
 	uint32_t uid = blockIdx.x * blockDim.x + tid;
     // dtype temp_res = 0;
 
-    __shared__ alignas(16) dtype smem[LOAD_SIZE/sizeof(dtype)];
+    // __shared__ alignas(16) dtype smem[LOAD_SIZE/sizeof(dtype)];
+    // TMA requires 128-byte alignment for shared memory
+    extern __shared__ __align__(128) dtype smem[];
 
 #pragma nv_diag_suppress static_var_with_dynamic_init
     __shared__ barrier bar;
@@ -163,12 +165,17 @@ int main() {
         CUtensorMap tma_desc{};
         create_tensor_map(tma_desc, array_g);
 
+        auto kernel = &tma_bw_2d;
+        int smem_size = LOAD_SIZE;
+        if (smem_size >= 48 * 1024) {
+            cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+        }
         cudaEvent_t start, stop;
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
         cudaEventRecord(start);
 
-        tma_bw_2d<<<BLOCKS[i], THREADS_PER_BLOCK>>>(tma_desc, dsink_g);
+        kernel<<<BLOCKS[i], THREADS_PER_BLOCK, smem_size>>>(tma_desc, dsink_g);
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         CUDA_CHECK(cudaPeekAtLastError());
