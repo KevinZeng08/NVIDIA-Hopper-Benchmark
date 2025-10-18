@@ -1,22 +1,41 @@
 #include <cuda.h>               // CUtensormap
 #include <cuda/barrier>
+#include <cuda_fp16.h>          // half
+#include <cuda_bf16.h>          // __nv_bfloat16
 #include "../../util.h"
 
 
 using barrier = cuda::barrier<cuda::thread_scope_block>;
 
-// float
-typedef float dtype;
-CUtensorMapDataType tm_dtype = CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
+// Data type configuration
+// Uncomment ONE of the following lines to select data type:
+// #define USE_FLOAT32
+// #define USE_FLOAT16
+#define USE_BFLOAT16
+
+#if defined(USE_FLOAT16)
+    typedef half dtype;
+    CUtensorMapDataType tm_dtype = CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
+    #define DTYPE_NAME "FP16"
+#elif defined(USE_BFLOAT16)
+    typedef __nv_bfloat16 dtype;
+    CUtensorMapDataType tm_dtype = CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
+    #define DTYPE_NAME "BF16"
+#else  // USE_FLOAT32 or default
+    typedef float dtype;
+    CUtensorMapDataType tm_dtype = CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
+    #define DTYPE_NAME "FP32"
+#endif
 
 
-#define ARRAY_SIZE (4 * 1024*1024*(1024/sizeof(dtype))) // GB
+#define ARRAY_SIZE (4 * 1024*1024*(1024/sizeof(dtype))) // 4 GB total for all data types
 #define GMEM_WIDTH (32*1024)
 #define GMEM_HEIGHT (32*1024)
-constexpr uint SMEM_WIDTH[] = {16, 32, 32, 64, 96, 64};
-constexpr uint  SMEM_HEIGHT[] = {16, 16, 32, 32, 32, 64}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
-constexpr uint BLOCKS[] = {114, 228, 342, 456};	
-#define THREADS_PER_BLOCK 1024
+constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 64, 128, 128}; // 0.5-32KB
+constexpr uint  SMEM_HEIGHT[] = {1, 4, 8, 16, 32, 64, 64, 128}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
+// constexpr uint BLOCKS[] = {114, 228, 342, 456};	
+constexpr uint BLOCKS[] = {132}; // same as number of SMs, simulate persistent kernels	
+#define THREADS_PER_BLOCK 128
 constexpr uint IDX = 5;
 constexpr uint LOAD_SIZE (SMEM_WIDTH[IDX]*SMEM_HEIGHT[IDX]*sizeof(dtype)); //bytes
 
@@ -27,7 +46,13 @@ __global__ void init_data(dtype * array) {
     auto total_threads = blockDim.x * gridDim.x;
 
 	for (uint32_t i = uid; i < ARRAY_SIZE; i += total_threads) {
+#if defined(USE_FLOAT16)
+		array[i] = __float2half((float)uid);
+#elif defined(USE_BFLOAT16)
+		array[i] = __float2bfloat16((float)uid);
+#else
 		array[i] = uid;
+#endif
     }
 }
 
@@ -43,10 +68,11 @@ __global__ void tma_bw_2d(const __grid_constant__ CUtensorMap tma_desc, dtype *d
 #pragma nv_diag_suppress static_var_with_dynamic_init
     __shared__ barrier bar;
     if (tid == 0) {
-        init(&bar, blockDim.x);                    // a)
+        init(&bar, 1);                    // a) only one thread issues TMA copy, so only wait for 1 thread
         asm volatile("fence.proxy.async.shared::cta;");     // b)
         
-        for (int i = uid; i < ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE; i += gridDim.x * blockDim.x) {
+        // for (int i = uid; i < ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE; i += gridDim.x * blockDim.x) {
+        for (int i = uid; i < ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE; i += gridDim.x * 1) {
             int tensor_cood_x = (i % (GMEM_WIDTH / SMEM_WIDTH[IDX])) * SMEM_WIDTH[IDX];
             int tensor_cood_y = (i / (GMEM_WIDTH / SMEM_WIDTH[IDX])) * SMEM_HEIGHT[IDX];
             asm volatile(
@@ -121,7 +147,9 @@ void create_tensor_map(CUtensorMap & tma_desc, dtype * array)
 int main() {
 
     for (int i = 0; i < sizeof(BLOCKS)/sizeof(int); ++i) {
-        printf("Block size = %d, X = %d, Y = %d, Load size = %d KB\n", BLOCKS[i], SMEM_WIDTH[IDX], SMEM_HEIGHT[IDX], LOAD_SIZE/1024);
+        printf("\n=== TMA 2D Bandwidth Test [%s] ===\n", DTYPE_NAME);
+        printf("Data type size: %zu bytes\n", sizeof(dtype));
+        printf("Block size = %d, X = %d, Y = %d, Load size = %.2lf KB\n", BLOCKS[i], SMEM_WIDTH[IDX], SMEM_HEIGHT[IDX], float(LOAD_SIZE)/1024);
         dtype *dsink = (dtype *)malloc(sizeof(dtype));
 
         dtype *array_g;
@@ -140,7 +168,7 @@ int main() {
         cudaEventCreate(&stop);
         cudaEventRecord(start);
 
-        tma_bw_2d<<<BLOCKS[i], 1>>>(tma_desc, dsink_g);
+        tma_bw_2d<<<BLOCKS[i], THREADS_PER_BLOCK>>>(tma_desc, dsink_g);
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         CUDA_CHECK(cudaPeekAtLastError());

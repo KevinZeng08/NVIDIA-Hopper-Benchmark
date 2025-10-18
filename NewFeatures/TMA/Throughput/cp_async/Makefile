@@ -13,15 +13,18 @@ CC := nvcc
 INCLUDE := 
 LIB := 
 
-SRC = tma_bw_2d.cu
+SOURCES = cp_async_2d.cu
+EXES = cp_async_2d
 
-EXE = tma_bw_2d
+all: $(EXES)
 
-release:
-	$(CC) $(CUOPTS) $(SRC) -o $(EXE) -I$(INCLUDE) -L$(LIB) -lcudart ${PTXAS_FLAG}
+cp_async_2d: cp_async_2d.cu
+	$(CC) $(CUOPTS) $< -o $@ -I$(INCLUDE) -L$(LIB) -lcudart ${PTXAS_FLAG}
+
+release: all
 
 clean:
-	rm -f *.o; rm -f $(EXE)
+	rm -f *.o $(EXES)
 
-run:
-	./$(EXE)
+run: all
+	./cp_async_2d
