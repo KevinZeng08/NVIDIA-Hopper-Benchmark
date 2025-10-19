@@ -76,7 +76,7 @@ __global__ void cp_async_bw_2d(dtype *array, dtype *dsink)
 #pragma nv_diag_suppress static_var_with_dynamic_init
     __shared__ barrier bar;
     if (tid == 0) {
-        init(&bar, 128);
+        init(&bar, blockDim.x);
         asm volatile("fence.proxy.async.shared::cta;");     // b)
     }
     __syncthreads();
