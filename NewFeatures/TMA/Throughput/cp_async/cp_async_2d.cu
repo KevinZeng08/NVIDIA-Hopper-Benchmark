@@ -24,13 +24,11 @@ using barrier = cuda::barrier<cuda::thread_scope_block>;
 #endif
 
 #define ARRAY_SIZE (4 * 1024*1024*(1024/sizeof(dtype))) // GB
-#define GMEM_WIDTH (32*1024)
-#define GMEM_HEIGHT (32*1024)
-constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 128, 128, 256, 256}; // 1-128 KB
-constexpr uint  SMEM_HEIGHT[] = {4, 8, 16, 32, 64, 64, 128, 128, 256}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
+constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 64, 64, 128, 128, 256, 256}; // 1-128 KB
+constexpr uint  SMEM_HEIGHT[] = {1, 2, 4, 8, 16, 32, 64, 64, 128, 128, 256}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
 constexpr uint BLOCKS[] = {132}; // same as number of SMs
 #define THREADS_PER_BLOCK 128
-constexpr uint IDX = 8;
+constexpr uint IDX = 1;
 constexpr uint LOAD_SIZE = (SMEM_WIDTH[IDX] * SMEM_HEIGHT[IDX] * sizeof(dtype)); //bytes
 
 // cp.async helper functions
@@ -71,9 +69,17 @@ __global__ void cp_async_bw_2d(dtype *array, dtype *dsink)
 {
     uint32_t tid = threadIdx.x;
     uint32_t block_offset = blockIdx.x;
+    // dtype temp_res = 0;
 
     // __shared__ alignas(16) dtype smem[LOAD_SIZE/sizeof(dtype)];
     extern __shared__ __align__(128) dtype smem[];
+#pragma nv_diag_suppress static_var_with_dynamic_init
+    __shared__ barrier bar;
+    if (tid == 0) {
+        init(&bar, 128);
+        asm volatile("fence.proxy.async.shared::cta;");     // b)
+    }
+    __syncthreads();
 
     const int total_tiles = ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE;
     const int cp_async_bytes = 16; // 16-byte chunks for cp.async.cg
@@ -97,6 +103,12 @@ __global__ void cp_async_bw_2d(dtype *array, dtype *dsink)
         // Commit and wait
         cp_async_commit_group();
         cp_async_wait_group<0>();
+        // temp_res += smem[0];
+        // 3b. All threads arrive on the barrier
+        barrier::arrival_token token = bar.arrive();
+
+        // 3c. Wait for the data to have arrived.
+        bar.wait(std::move(token));
     }
 }
 
@@ -108,7 +120,6 @@ int main() {
         printf("Data type size: %zu bytes\n", sizeof(dtype));
         printf("Block size = %d, Threads = %d\n", BLOCKS[i], THREADS_PER_BLOCK);
         printf("Tile dimensions: Width = %d, Height = %d\n", SMEM_WIDTH[IDX], SMEM_HEIGHT[IDX]);
-        printf("Global dimensions: Width = %d, Height = %d\n", GMEM_WIDTH, GMEM_HEIGHT);
         printf("Load size per tile = %.2f KB\n", (float)LOAD_SIZE/1024);
 
         dtype *dsink = (dtype *)malloc(sizeof(dtype));
@@ -141,7 +152,7 @@ int main() {
 
         printf("\n[CP.ASYNC version]\n");
         printf("Total time = %f ms, transfer size = %lu bytes\n", milliseconds, ARRAY_SIZE * sizeof(dtype));
-        printf("Throughput: %f GB/s\n\n", ARRAY_SIZE * sizeof(dtype) / (milliseconds / 1000) / 1024 / 1024 / 1024);
+        printf("Throughput: %.2f GB/s\n\n", ARRAY_SIZE * sizeof(dtype) / (milliseconds / 1000) / 1024 / 1024 / 1024);
 
         cudaFree(array_g);
         cudaFree(dsink_g);

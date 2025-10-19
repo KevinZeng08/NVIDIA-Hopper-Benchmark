@@ -29,14 +29,18 @@ using barrier = cuda::barrier<cuda::thread_scope_block>;
 
 
 #define ARRAY_SIZE (4 * 1024*1024*(1024/sizeof(dtype))) // 4 GB total for all data types
+#if defined(USE_FLOAT16) || defined(USE_BFLOAT16)
+#define GMEM_WIDTH (64*1024)
+#else
 #define GMEM_WIDTH (32*1024)
+#endif
 #define GMEM_HEIGHT (32*1024)
-constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 64, 128, 128, 256, 256}; // 0.5-128KB
-constexpr uint  SMEM_HEIGHT[] = {1, 4, 8, 16, 32, 64, 64, 128, 128, 256}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
+constexpr uint SMEM_WIDTH[] = {64, 64, 64, 64, 64, 64, 64, 128, 128, 256, 256}; // 0.125-128KB
+constexpr uint  SMEM_HEIGHT[] = {1, 2, 4, 8, 16, 32, 64, 64, 128, 128, 256}; // sizeof(float) * 2*32 * 2*32 equals to LOAD_SIZE 
 // constexpr uint BLOCKS[] = {114, 228, 342, 456};	
 constexpr uint BLOCKS[] = {132}; // same as number of SMs, simulate persistent kernels	
 #define THREADS_PER_BLOCK 128
-constexpr uint IDX = 9;
+constexpr uint IDX = 10;
 constexpr uint LOAD_SIZE (SMEM_WIDTH[IDX]*SMEM_HEIGHT[IDX]*sizeof(dtype)); //bytes
 
 
@@ -60,7 +64,8 @@ __global__ void tma_bw_2d(const __grid_constant__ CUtensorMap tma_desc, dtype *d
 {
 
     uint32_t tid = threadIdx.x;
-	uint32_t uid = blockIdx.x * blockDim.x + tid;
+	// uint32_t uid = blockIdx.x * blockDim.x + tid;
+    uint32_t block_offset = blockIdx.x;
     // dtype temp_res = 0;
 
     // __shared__ alignas(16) dtype smem[LOAD_SIZE/sizeof(dtype)];
@@ -74,7 +79,7 @@ __global__ void tma_bw_2d(const __grid_constant__ CUtensorMap tma_desc, dtype *d
         asm volatile("fence.proxy.async.shared::cta;");     // b)
         
         // for (int i = uid; i < ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE; i += gridDim.x * blockDim.x) {
-        for (int i = uid; i < ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE; i += gridDim.x * 1) {
+        for (int i = block_offset; i < ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE; i += gridDim.x * 1) {
             int tensor_cood_x = (i % (GMEM_WIDTH / SMEM_WIDTH[IDX])) * SMEM_WIDTH[IDX];
             int tensor_cood_y = (i / (GMEM_WIDTH / SMEM_WIDTH[IDX])) * SMEM_HEIGHT[IDX];
             asm volatile(
@@ -184,6 +189,6 @@ int main() {
 
         CUDA_CHECK(cudaMemcpy(dsink, dsink_g, sizeof(dtype), cudaMemcpyDeviceToHost));
         printf("Total time = %f ms, transfer size = %lu bytes\n", milliseconds, ARRAY_SIZE * sizeof(dtype));
-        printf("Throughput: %f GB/s\n", ARRAY_SIZE * sizeof(dtype) / (milliseconds / 1000) / 1024 / 1024 / 1024);
+        printf("Throughput: %.2f GB/s\n", ARRAY_SIZE * sizeof(dtype) / (milliseconds / 1000) / 1024 / 1024 / 1024);
     }
 }
