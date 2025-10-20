@@ -4,6 +4,7 @@ GENCODE_SM70 := -gencode=arch=compute_70,code=\"sm_70,compute_70\"
 GENCODE_SM89 := -gencode=arch=compute_89,code=\"sm_89,compute_89\"
 GENCODE_SM90 := -gencode=arch=compute_90,code=\"sm_90,compute_90\"
 PTXAS_FLAG := --ptxas-options=--verbose,--register-usage-level=10,--warn-on-local-memory-usage
+PROFILE_FLAG := -lineinfo
 
 CUOPTS = $(GENCODE_SM90) 
 
@@ -19,7 +20,7 @@ EXES = cp_async_2d
 all: $(EXES)
 
 cp_async_2d: cp_async_2d.cu
-	$(CC) $(CUOPTS) $< -o $@ -I$(INCLUDE) -L$(LIB) -lcudart ${PTXAS_FLAG}
+	$(CC) $(CUOPTS) $< -o $@ -I$(INCLUDE) -L$(LIB) -lcudart ${PTXAS_FLAG} ${PROFILE_FLAG}
 
 release: all
 

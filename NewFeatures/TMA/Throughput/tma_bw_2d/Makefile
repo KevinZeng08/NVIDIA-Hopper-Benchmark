@@ -18,7 +18,7 @@ SRC = tma_bw_2d.cu
 EXE = tma_bw_2d
 
 release:
-	$(CC) $(CUOPTS) $(SRC) -o $(EXE) -I$(INCLUDE) -L$(LIB) -lcudart ${PTXAS_FLAG}
+	$(CC) $(CUOPTS) $(SRC) -o $(EXE) -I$(INCLUDE) -L$(LIB) -lcudart ${PTXAS_FLAG} ${PROFILE_FLAG}
 
 clean:
 	rm -f *.o; rm -f $(EXE)

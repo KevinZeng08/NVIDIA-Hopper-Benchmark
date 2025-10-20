@@ -30,6 +30,7 @@ constexpr uint BLOCKS[] = {132}; // same as number of SMs
 #define THREADS_PER_BLOCK 128
 constexpr uint IDX = 1;
 constexpr uint LOAD_SIZE = (SMEM_WIDTH[IDX] * SMEM_HEIGHT[IDX] * sizeof(dtype)); //bytes
+constexpr int CP_ASYNC_BYTES = 16; // 16-byte each thread for cp.async.cg
 
 // cp.async helper functions
 __device__ inline void cp_async_16(void *smem_dst, const void *global_src) {
@@ -82,7 +83,6 @@ __global__ void cp_async_bw_2d(dtype *array, dtype *dsink)
     __syncthreads();
 
     const int total_tiles = ARRAY_SIZE * sizeof(dtype) / LOAD_SIZE;
-    const int cp_async_bytes = 16; // 16-byte chunks for cp.async.cg
 
     // Each block processes tiles with stride
     for (int tile_idx = block_offset; tile_idx < total_tiles; tile_idx += gridDim.x) {
@@ -91,9 +91,9 @@ __global__ void cp_async_bw_2d(dtype *array, dtype *dsink)
         size_t base_offset = tile_idx * (LOAD_SIZE / sizeof(dtype));
 
         // All threads cooperatively load the tile using cp.async
-        for (int byte_offset = tid * cp_async_bytes;
+        for (int byte_offset = tid * CP_ASYNC_BYTES;
              byte_offset < LOAD_SIZE;
-             byte_offset += blockDim.x * cp_async_bytes) {
+             byte_offset += blockDim.x * CP_ASYNC_BYTES) {
 
             dtype *src_ptr = array + base_offset + byte_offset / sizeof(dtype);
             dtype *dst_ptr = smem + byte_offset / sizeof(dtype);
