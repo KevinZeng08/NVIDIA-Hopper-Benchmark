@@ -69,11 +69,11 @@ inline void gpuReport(cudaError_t code, const char *file, int line)
 /*
  * CUDA Driver API
  */
-PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled() {
+PFN_cuTensorMapEncodeTiled_v12000 get_cuTensorMapEncodeTiled() {
   // Get pointer to cuTensorMapEncodeTiled
   cudaDriverEntryPointQueryResult driver_status;
   void* cuTensorMapEncodeTiled_ptr = nullptr;
   CUDA_CHECK(cudaGetDriverEntryPoint("cuTensorMapEncodeTiled", &cuTensorMapEncodeTiled_ptr, cudaEnableDefault, &driver_status));
 
-  return reinterpret_cast<PFN_cuTensorMapEncodeTiled>(cuTensorMapEncodeTiled_ptr);
+  return reinterpret_cast<PFN_cuTensorMapEncodeTiled_v12000>(cuTensorMapEncodeTiled_ptr);
 }
